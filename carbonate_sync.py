@@ -41,6 +41,9 @@ HAVE_HEAL_WITH_TIME_RANGE = (
     set(['start_time', 'end_time']) <=
     set(inspect.getargspec(carbonate_sync.heal_metric).args))
 
+HAVE_HEAL_WITH_OVERWRITE = (
+    'overwrite' in set(inspect.getargspec(carbonate_sync.heal_metric).args))
+
 STORAGE_DIR = carbonate_cli.STORAGE_DIR
 
 MANDATORY_SSH_OPTIONS = [
@@ -175,13 +178,15 @@ def _heal(batch):
         src = os.path.join(batch.staging_dir, metric)
         dst = os.path.join(STORAGE_DIR, metric)
         try:
+            if batch.overwrite:
+                _fill_with_none(dst, batch.start_time, batch.end_time)
+            kwargs = {}
             if HAVE_HEAL_WITH_TIME_RANGE:
-                carbonate_sync.heal_metric(
-                    src, dst,
-                    start_time=batch.start_time,
-                    end_time=batch.end_time)
-            else:
-                carbonate_sync.heal_metric(src, dst)
+                kwargs['start_time'] = batch.start_time
+                kwargs['end_time'] = batch.end_time
+            if HAVE_HEAL_WITH_OVERWRITE:
+                kwargs['overwrite'] = overwrite
+            carbonate_sync.heal_metric(src, dst, **kwargs)
         except Exception as e:
             logging.exception("Failed to heal %s" % dst)
 
@@ -192,7 +197,8 @@ class _Batch(collections.namedtuple('_Batch',
                                     ['staging_dir', 'metrics_fs',
                                      'start_time', 'end_time',
                                      'remote_user', 'remote_node',
-                                     'rsync_options', 'ssh_options'])):
+                                     'rsync_options', 'ssh_options',
+                                     'overwrite'])):
 
     def split_chunks(self, chunksize):
         res = []
@@ -313,6 +319,11 @@ def _parse_args():
         default=time.time(),
         help='Sync data older than this time (default: now).')
 
+    parser.add_argument(
+        '--overwrite', type=bool,
+        default=False,
+        help='Overwrite local data with remote data (default: false).')
+
     args = parser.parse_args()
     if args.remote_cluster is None:
         args.remote_cluster = args.cluster
@@ -368,6 +379,7 @@ def main():
             remote_node=node,
             rsync_options=args.rsync_options,
             ssh_options=args.ssh_options,
+            overwrite=args.overwrite,
         ).split_chunks(args.batch_size)
 
         info('- %s: Merging and fetching %s metrics' % (node, len(metrics)))
